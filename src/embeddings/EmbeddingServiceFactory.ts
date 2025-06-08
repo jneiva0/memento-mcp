@@ -1,6 +1,7 @@
 import type { EmbeddingService } from './EmbeddingService.js';
 import { DefaultEmbeddingService } from './DefaultEmbeddingService.js';
 import { OpenAIEmbeddingService } from './OpenAIEmbeddingService.js';
+import { OllamaEmbeddingService } from './OllamaEmbeddingService.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -11,6 +12,7 @@ export interface EmbeddingServiceConfig {
   model?: string;
   dimensions?: number;
   apiKey?: string;
+  apiEndpoint?: string;
   [key: string]: unknown;
 }
 
@@ -102,8 +104,7 @@ export class EmbeddingServiceFactory {
 
     logger.debug('EmbeddingServiceFactory: Creating service from environment variables', {
       mockEmbeddings: useMockEmbeddings,
-      openaiKeyPresent: !!process.env.OPENAI_API_KEY,
-      embeddingModel: process.env.OPENAI_EMBEDDING_MODEL || 'default',
+      embeddingProvider: process.env.EMBEDDING_PROVIDER || 'default',
     });
 
     if (useMockEmbeddings) {
@@ -111,36 +112,28 @@ export class EmbeddingServiceFactory {
       return new DefaultEmbeddingService();
     }
 
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const embeddingModel = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+    const providerName = process.env.EMBEDDING_PROVIDER || 'default';
+    const config: EmbeddingServiceConfig = {
+      provider: providerName,
+      apiKey: process.env.OPENAI_API_KEY,
+      apiEndpoint: process.env.OLLAMA_API_ENDPOINT,
+      model: process.env.EMBEDDING_MODEL,
+    };
 
-    if (openaiApiKey) {
-      try {
-        logger.debug('EmbeddingServiceFactory: Creating OpenAI embedding service', {
-          model: embeddingModel,
-        });
-        const service = new OpenAIEmbeddingService({
-          apiKey: openaiApiKey,
-          model: embeddingModel,
-        });
-        logger.info('EmbeddingServiceFactory: OpenAI embedding service created successfully', {
-          model: service.getModelInfo().name,
-          dimensions: service.getModelInfo().dimensions,
-        });
-        return service;
-      } catch (error) {
-        logger.error('EmbeddingServiceFactory: Failed to create OpenAI service', error);
-        logger.info('EmbeddingServiceFactory: Falling back to default embedding service');
-        // Fallback to default if OpenAI service creation fails
-        return new DefaultEmbeddingService();
-      }
+    try {
+      logger.debug(`EmbeddingServiceFactory: Creating ${providerName} embedding service`);
+      const service = EmbeddingServiceFactory.createService(config);
+      logger.info(`EmbeddingServiceFactory: ${providerName} embedding service created successfully`, {
+        model: service.getModelInfo().name,
+        dimensions: service.getModelInfo().dimensions,
+      });
+      return service;
+    } catch (error) {
+      logger.error(`EmbeddingServiceFactory: Failed to create ${providerName} service`, error);
+      logger.info('EmbeddingServiceFactory: Falling back to default embedding service');
+      // Fallback to default if service creation fails
+      return new DefaultEmbeddingService();
     }
-
-    // No OpenAI API key, using default embedding service
-    logger.info(
-      'EmbeddingServiceFactory: No OpenAI API key found, using default embedding service'
-    );
-    return new DefaultEmbeddingService();
   }
 
   /**
@@ -154,12 +147,14 @@ export class EmbeddingServiceFactory {
   static createOpenAIService(
     apiKey: string,
     model?: string,
-    dimensions?: number
+    dimensions?: number,
+    apiEndpoint?: string,
   ): EmbeddingService {
     return new OpenAIEmbeddingService({
       apiKey,
       model,
       dimensions,
+      apiEndpoint,
     });
   }
 
@@ -186,6 +181,15 @@ EmbeddingServiceFactory.registerProvider('openai', (config = {}) => {
 
   return new OpenAIEmbeddingService({
     apiKey: config.apiKey,
+    model: config.model,
+    dimensions: config.dimensions,
+    apiEndpoint: config.apiEndpoint as string | undefined,
+  });
+});
+
+EmbeddingServiceFactory.registerProvider('ollama', (config = {}) => {
+  return new OllamaEmbeddingService({
+    apiEndpoint: config.apiEndpoint as string,
     model: config.model,
     dimensions: config.dimensions,
   });

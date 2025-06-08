@@ -3,15 +3,14 @@ import { EmbeddingService, type EmbeddingModelInfo } from './EmbeddingService.js
 import { logger } from '../utils/logger.js';
 
 /**
- * Configuration for OpenAI embedding service
+ * Configuration for Ollama embedding service
  */
-export interface OpenAIEmbeddingConfig {
+export interface OllamaEmbeddingConfig {
   /**
-   * OpenAI API key
+   * Ollama API endpoint
    */
-  apiKey: string;
-
   apiEndpoint?: string;
+
   /**
    * Optional model name to use
    */
@@ -28,59 +27,34 @@ export interface OpenAIEmbeddingConfig {
   version?: string;
 }
 
-// API key error message is defined but not used directly
-// It's kept for documentation purposes
-// const _API_KEY_ERROR = 'OpenAI API key is required. Set OPENAI_API_KEY environment variable.';
-
 /**
- * OpenAI API response structure
+ * Ollama API response structure
  */
-interface OpenAIEmbeddingResponse {
-  data: Array<{
-    embedding: number[];
-    index: number;
-    object: string;
-  }>;
-  model: string;
-  object: string;
-  usage: {
-    prompt_tokens: number;
-    total_tokens: number;
-  };
+interface OllamaEmbeddingResponse {
+  embedding: number[];
 }
 
 /**
- * Service implementation that generates embeddings using OpenAI's API
+ * Service implementation that generates embeddings using Ollama's API
  */
-export class OpenAIEmbeddingService extends EmbeddingService {
-  private apiKey: string;
+export class OllamaEmbeddingService extends EmbeddingService {
   private model: string;
   private dimensions: number;
   private version: string;
   private apiEndpoint: string;
 
   /**
-   * Create a new OpenAI embedding service
+   * Create a new Ollama embedding service
    *
    * @param config - Configuration for the service
    */
-  constructor(config: OpenAIEmbeddingConfig) {
+  constructor(config: OllamaEmbeddingConfig = {}) {
     super();
 
-    if (!config) {
-      throw new Error('Configuration is required for OpenAI embedding service');
-    }
-
-    // Only require API key in non-test environments and when it's not provided in env
-    if (!config.apiKey && !process.env.OPENAI_API_KEY) {
-      throw new Error('API key is required for OpenAI embedding service');
-    }
-
-    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
-    this.model = config.model || 'text-embedding-3-small';
-    this.dimensions = config.dimensions || 1536; // text-embedding-3-small has 1536 dimensions
-    this.version = config.version || '3.0.0';
-    this.apiEndpoint = config.apiEndpoint || 'https://api.openai.com/v1/embeddings';
+    this.model = config.model || 'mxbai-embed-large';
+    this.dimensions = config.dimensions || 1024;
+    this.version = config.version || '1.0.0';
+    this.apiEndpoint = config.apiEndpoint || 'http://localhost:11434/api/embeddings';
   }
 
   /**
@@ -90,10 +64,6 @@ export class OpenAIEmbeddingService extends EmbeddingService {
    * @returns Promise resolving to embedding vector
    */
   override async generateEmbedding(text: string): Promise<number[]> {
-    if (!this.apiKey) {
-      throw new Error('No OpenAI API key available');
-    }
-
     logger.debug('Generating embedding', {
       text: text.substring(0, 50) + '...',
       model: this.model,
@@ -101,33 +71,32 @@ export class OpenAIEmbeddingService extends EmbeddingService {
     });
 
     try {
-      const response = await axios.post<OpenAIEmbeddingResponse>(
+      const response = await axios.post<OllamaEmbeddingResponse>(
         this.apiEndpoint,
         {
-          input: text,
+          prompt: text,
           model: this.model,
         },
         {
           headers: {
-            Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
           },
           timeout: 10000, // 10 second timeout
         }
       );
 
-      logger.debug('Received response from OpenAI API');
+      logger.debug('Received response from Ollama API');
 
-      if (!response.data || !response.data.data || !response.data.data[0]) {
-        logger.error('Invalid response from OpenAI API', { response: response.data });
-        throw new Error('Invalid response from OpenAI API - missing embedding data');
+      if (!response.data || !response.data.embedding) {
+        logger.error('Invalid response from Ollama API', { response: response.data });
+        throw new Error('Invalid response from Ollama API - missing embedding data');
       }
 
-      const embedding = response.data.data[0].embedding;
+      const embedding = response.data.embedding;
 
       if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
         logger.error('Invalid embedding returned', { embedding });
-        throw new Error('Invalid embedding returned from OpenAI API');
+        throw new Error('Invalid embedding returned from Ollama API');
       }
 
       logger.debug('Generated embedding', {
@@ -135,12 +104,6 @@ export class OpenAIEmbeddingService extends EmbeddingService {
         sample: embedding.slice(0, 5),
         isArray: Array.isArray(embedding),
       });
-
-      // Log token usage if in debug mode
-      if (process.env.DEBUG === 'true') {
-        const tokens = response.data.usage?.prompt_tokens || 'unknown';
-        logger.debug('OpenAI embedding token usage', { tokens });
-      }
 
       // Normalize the embedding vector
       this._normalizeVector(embedding);
@@ -164,27 +127,17 @@ export class OpenAIEmbeddingService extends EmbeddingService {
         const statusCode = axiosError.response?.status;
         const responseData = axiosError.response?.data;
 
-        logger.error('OpenAI API error', {
+        logger.error('Ollama API error', {
           status: statusCode,
           data: responseData,
           message: axiosError.message,
         });
-
-        // Handle specific error types
-        if (statusCode === 401) {
-          throw new Error('OpenAI API authentication failed - invalid API key');
-        } else if (statusCode === 429) {
-          throw new Error('OpenAI API rate limit exceeded - try again later');
-        } else if (statusCode && statusCode >= 500) {
-          throw new Error(`OpenAI API server error (${statusCode}) - try again later`);
-        }
-
-        // Include response data in error if available
+        
         const errorDetails = responseData
           ? `: ${JSON.stringify(responseData).substring(0, 200)}`
           : '';
 
-        throw new Error(`OpenAI API error (${statusCode || 'unknown'})${errorDetails}`);
+        throw new Error(`Ollama API error (${statusCode || 'unknown'})${errorDetails}`);
       }
 
       // Handle other errors
@@ -201,33 +154,11 @@ export class OpenAIEmbeddingService extends EmbeddingService {
    * @returns Promise resolving to array of embedding vectors
    */
   override async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    try {
-      const response = await axios.post<OpenAIEmbeddingResponse>(
-        this.apiEndpoint,
-        {
-          input: texts,
-          model: this.model,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      const embeddings = response.data.data.map((item) => item.embedding);
-
-      // Normalize each embedding vector
-      embeddings.forEach((embedding) => {
-        this._normalizeVector(embedding);
-      });
-
-      return embeddings;
-    } catch (error: unknown) {
-      const errorMessage = this._getErrorMessage(error);
-      throw new Error(`Failed to generate embeddings: ${errorMessage}`);
+    const embeddings: number[][] = [];
+    for(const text of texts) {
+        embeddings.push(await this.generateEmbedding(text));
     }
+    return embeddings;
   }
 
   /**
