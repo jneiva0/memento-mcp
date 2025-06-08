@@ -1,0 +1,11 @@
+[project]
+name = "memento-mcp"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "neo4j>=5.28.1",
+    "netgraph>=4.13.2",
+    "networkx>=3.5",
+    "py2neo>=2021.2.4",
+]
